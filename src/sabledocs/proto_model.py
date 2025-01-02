@@ -97,6 +97,8 @@ class ServiceMethod(CodeItem):
         CodeItem.__init__(self)
         self.request = ServiceMethodArgument("", "", "")
         self.response = ServiceMethodArgument("", "", "")
+        self.mqtt_request_topic = ""
+        self.mqtt_response_topic = ""
 
 
 class Service(CodeItem):

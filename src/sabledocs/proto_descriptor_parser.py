@@ -8,9 +8,7 @@ from google.protobuf.descriptor_pb2 import ServiceDescriptorProto
 from google.protobuf.descriptor_pb2 import MethodDescriptorProto
 from sabledocs.proto_model import MessageField, Message, EnumValue, Enum, OneOfFieldGroup, ServiceMethod, ServiceMethodArgument, Service, Package, LocationInfo, SableContext
 from sabledocs.sable_config import MemberOrdering, RepositoryType, SableConfig
-import pprint
 import markdown
-import pprint
 import re
 from furl import furl
 
@@ -32,6 +30,7 @@ COMMENT_SERVICE_METHOD_INDEX = 2
 FIELD_TYPE_MESSAGE = 11
 FIELD_TYPE_ENUM = 14
 
+MQTT_EXTENSION_NUMBER = 50001
 
 def build_source_code_url(repository_url, repository_type, repository_branch, repository_dir, file_path, line_number):
     match repository_type:
@@ -227,15 +226,79 @@ def parse_service_method(service_method: MethodDescriptorProto, ctx: ParseContex
         service_method.input_type.strip("."),
         "MESSAGE"
     )
-
     sm.response = ServiceMethodArgument(
         service_method.output_type[service_method.output_type.rfind(".") + 1:],
         service_method.output_type.strip("."),
         "MESSAGE"
     )
-
+    sm.mqtt_topics = parse_mqtt_topics(service_method, ctx)
     return sm
 
+def parse_mqtt_topics(service_method: MethodDescriptorProto, ctx: ParseContext):
+    mqtt_topics = {}
+    # one could argue this is overly complex, but it avoids a somewhat circular dependency on the generated protobuf files
+    if service_method.HasField('options'):
+        try:
+            raw_data = service_method.options.SerializeToString()
+            from google.protobuf.internal import decoder, wire_format
+            
+            pos = 0
+            while pos < len(raw_data):
+                tag_value, pos = decoder._DecodeVarint(raw_data, pos)
+                field_number, wire_type = wire_format.UnpackTag(tag_value)
+                
+                if field_number == MQTT_EXTENSION_NUMBER:
+                    length, pos = decoder._DecodeVarint(raw_data, pos)
+                    mqtt_data = raw_data[pos:pos + length]
+                    
+                    # Parse the MQTT data
+                    mqtt_pos = 0
+                    request = response = None
+                    while mqtt_pos < len(mqtt_data):
+                        mqtt_tag, mqtt_pos = decoder._DecodeVarint(mqtt_data, mqtt_pos)
+                        field_num = wire_format.UnpackTag(mqtt_tag)[0]
+                        
+                        if field_num == 1:  # request field
+                            str_len, str_pos = decoder._DecodeVarint(mqtt_data, mqtt_pos)
+                            request = mqtt_data[str_pos:str_pos + str_len].decode('utf-8')
+                            mqtt_pos = str_pos + str_len
+                        elif field_num == 2:  # response field
+                            str_len, str_pos = decoder._DecodeVarint(mqtt_data, mqtt_pos)
+                            response = mqtt_data[str_pos:str_pos + str_len].decode('utf-8')
+                            mqtt_pos = str_pos + str_len
+                        else:
+                            # Skip unknown fields
+                            wire_type = wire_format.UnpackTag(mqtt_tag)[1]
+                            if wire_type == wire_format.WIRETYPE_VARINT:
+                                _, mqtt_pos = decoder._DecodeVarint(mqtt_data, mqtt_pos)
+                            elif wire_type == wire_format.WIRETYPE_FIXED64:
+                                mqtt_pos += 8
+                            elif wire_type == wire_format.WIRETYPE_LENGTH_DELIMITED:
+                                str_len, mqtt_pos = decoder._DecodeVarint(mqtt_data, mqtt_pos)
+                                mqtt_pos += str_len
+                            elif wire_type == wire_format.WIRETYPE_FIXED32:
+                                mqtt_pos += 4
+                    
+                    mqtt_topics[service_method.name] = {
+                        "request": request,
+                        "response": response,
+                    }
+                    break
+                else:
+                    # Skip this field
+                    if wire_type == wire_format.WIRETYPE_VARINT:
+                        _, pos = decoder._DecodeVarint(raw_data, pos)
+                    elif wire_type == wire_format.WIRETYPE_FIXED64:
+                        pos += 8
+                    elif wire_type == wire_format.WIRETYPE_LENGTH_DELIMITED:
+                        length, pos = decoder._DecodeVarint(raw_data, pos)
+                        pos += length
+                    elif wire_type == wire_format.WIRETYPE_FIXED32:
+                        pos += 4
+                
+        except Exception as e:
+            print(f"Error parsing MQTT extension for method {service_method.name}: {e}")
+    return mqtt_topics
 
 def parse_service(service: ServiceDescriptorProto, ctx: ParseContext):
     s = Service()
@@ -366,7 +429,6 @@ def parse_proto_descriptor(sable_config: SableConfig):
     all_enums = []
     all_services = []
 
-    print()
     with open(sable_config.input_descriptor_file, mode="rb") as proto_descriptor_file:
         fds = FileDescriptorSet.FromString(proto_descriptor_file.read())
         for file in fds.file:

@@ -21,6 +21,28 @@
     </h5>
     Request: <code>{{ common.type_name(method.request) | trim }}</code><br>
     Response: <code>{{ common.type_name(method.response) }}</code><br>
+
+    {% if method.mqtt_topics and method.mqtt_topics[method.name] %}
+    <div class="mqtt-topics mt-4">
+      <h6 class="title is-6 mb-2">MQTT Topics</h6>
+      <table class="table is-narrow">
+        <tbody>
+          {% if method.mqtt_topics[method.name].request %}
+          <tr>
+            <td class="has-text-grey-dark" style="width: 100px">Request:</td>
+            <td><code>{{ method.mqtt_topics[method.name].request }}</code></td>
+          </tr>
+          {% endif %}
+          {% if method.mqtt_topics[method.name].response %}
+          <tr>
+            <td class="has-text-grey-dark">Response:</td>
+            <td><code>{{ method.mqtt_topics[method.name].response }}</code></td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   </div>
 
   {% if method.description_html %}
